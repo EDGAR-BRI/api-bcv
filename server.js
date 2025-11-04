@@ -79,7 +79,7 @@ async function scrapeBCVData() {
       }
     };
 
-    // Actualizar nuestra caché
+    
     cache = responseData;
     cacheTimestamp = Date.now();
     
@@ -87,35 +87,25 @@ async function scrapeBCVData() {
 
   } catch (error) {
     console.error('Error al hacer scraping:', error.message);
-    // Si falla el scraping, invalidamos la caché para que reintente en la próxima llamada
+    
     cache = null; 
     cacheTimestamp = null;
     throw new Error('No se pudo conectar y extraer los datos del BCV.');
   }
 }
 
-/**
- * --- ¡NUEVA FUNCIÓN DE CONTROLADOR! ---
- * Esta función maneja la lógica de la caché
- * y decide si debe hacer scraping o devolver la caché.
- */
 async function getTasaData() {
   const ahora = Date.now();
   if (cache && (ahora - cacheTimestamp < CACHE_DURATION_MS)) {
     console.log('ENTREGANDO DATOS DESDE LA CACHÉ...');
-    return cache; // Devuelve datos de la caché
+    return cache; 
   }
   
   // Si la caché no existe o está expirada, hace scraping
   return await scrapeBCVData();
 }
 
-// --- 5. CREAR LAS RUTAS DE LA API ---
 
-/**
- * --- RUTA 1: DEVOLVER TODAS LAS TASAS ---
- * (La que ya tenías)
- */
 app.get('/api/tasa', async (req, res) => {
   try {
     const data = await getTasaData();
@@ -128,25 +118,20 @@ app.get('/api/tasa', async (req, res) => {
   }
 });
 
-/**
- * --- ¡NUEVA RUTA 2: DEVOLVER UNA MONEDA INDIVIDUAL! ---
- * Usa un "parámetro de ruta" dinámico llamado :moneda
- */
+
 app.get('/api/tasa/:moneda', async (req, res) => {
   try {
-    // 1. Obtenemos el parámetro de la URL (ej. "usd", "eur")
-    // Lo convertimos a mayúsculas para que coincida con las claves de nuestro JSON (USD, EUR)
     const moneda = req.params.moneda.toUpperCase();
 
-    // 2. Obtenemos los datos (desde la caché o scraping)
     const data = await getTasaData();
 
-    // 3. Verificamos si la moneda solicitada existe en nuestros datos
     if (data.tasas && data.tasas[moneda]) {
-      // 4. Si existe, devolvemos SÓLO el objeto de esa moneda
-      res.json(data.tasas[moneda]);
+      res.json({
+        moneda: moneda,
+        fecha: data.fecha_valor,
+        valor: data.tasas[moneda]
+      });
     } else {
-      // 5. Si no existe (ej. /api/tasa/jpy), devolvemos un error 404
       res.status(404).json({ 
         error: 'Moneda no encontrada.',
         moneda_solicitada: moneda,
@@ -154,7 +139,6 @@ app.get('/api/tasa/:moneda', async (req, res) => {
       });
     }
   } catch (error) {
-    // Si getTasaData() falla (error de scraping), devolvemos un 500
     res.status(500).json({ 
       error: 'Error interno del servidor.',
       message: error.message 
@@ -162,7 +146,7 @@ app.get('/api/tasa/:moneda', async (req, res) => {
   }
 });
 
-// --- 6. INICIAR EL SERVIDOR ---
+// Se inicia el servidor
 app.listen(PORT, () => {
   console.log(`API de tasas BCV corriendo en http://localhost:${PORT}`);
   console.log(`Endpoint (TODAS): http://localhost:${PORT}/api/tasa`);
