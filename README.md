@@ -2,6 +2,8 @@
 
 Una API REST simple, desarrollada en Node.js y Express, que extrae las tasas de cambio de referencia publicadas por el [Banco Central de Venezuela (BCV)](https://www.bcv.org.ve/).
 
+URL de la [Api de tasa de cambio BCV (No oficial)](https://api-bcv-pi.vercel.app/api/tasa)
+
 Implementa un sistema de caché integrado para ofrecer respuestas instantáneas, minimizar las peticiones al sitio del BCV y evitar bloqueos de IP.
 
 ![Node.js](https://img.shields.io/badge/Node.js-18.x-339933?style=for-the-badge&logo=node.js)
