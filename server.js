@@ -18,6 +18,28 @@ function parseRate(rateStr) {
   return parseFloat(rateStr.trim().replace(',', '.'));
 }
 
+function parseDateBCV(dateStr) {
+  if (!dateStr) return null;
+  // Formato habitual del BCV: "Jueves, 25 Enero 2024"
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04', 'mayo': '05', 'junio': '06',
+    'julio': '07', 'agosto': '08', 'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+  
+  const cleanStr = dateStr.toLowerCase().replace(/,/g, '').trim();
+  const parts = cleanStr.split(/\s+/);
+  
+  // Buscamos día (1-2 dígitos), año (4 dígitos) y mes (texto)
+  let day = parts.find(p => /^\d{1,2}$/.test(p));
+  let year = parts.find(p => /^\d{4}$/.test(p));
+  let monthName = parts.find(p => months[p]);
+  
+  if (day && year && monthName) {
+    return `${year}-${months[monthName]}-${day.padStart(2, '0')}`;
+  }
+  return null;
+}
+
 
 async function scrapeBCVData() {
   console.log('EXTRAYENDO DATOS DESDE EL BCV (SIN CACHÉ)...');
@@ -50,11 +72,13 @@ async function scrapeBCVData() {
     const liraStr = $('#lira strong').text();
     const rubloStr = $('#rublo strong').text();
     const fecha = $(".pull-right .date-display-single").text().trim();
+    const fechaIso = parseDateBCV(fecha);
 
     // construir la respuesta
     const responseData = {
       fuente: 'Banco Central de Venezuela (BCV)',
       fecha_valor: fecha,
+      fecha_iso: fechaIso,
       tasas: {
         USD: {
           valor_str: dolarStr.trim(),
@@ -129,6 +153,7 @@ app.get('/api/tasa/:moneda', async (req, res) => {
       res.json({
         moneda: moneda,
         fecha: data.fecha_valor,
+        fecha_iso: data.fecha_iso,
         valor: data.tasas[moneda]
       });
     } else {
