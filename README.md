@@ -1,146 +1,82 @@
-# API de Tasas de Cambio BCV (No Oficial)
+# API de Tasas de Cambio (BCV + USDT P2P)
 
-Una API REST simple, desarrollada en Node.js y Express, que extrae las tasas de cambio de referencia publicadas por el [Banco Central de Venezuela (BCV)](https://www.bcv.org.ve/).
+API REST en Node.js y Express que obtiene tasas de cambio en bolívares (Bs) con semántica
+**"1 unidad de la moneda = X Bs"**:
 
-URL de la [Api de tasa de cambio BCV (No oficial)](https://api-bcv-pi.vercel.app/api/tasa)
+- **USD / EUR** — publicados por el [Banco Central de Venezuela (BCV)](https://www.bcv.org.ve/).
+- **USDT** — promedio de los precios **P2P de Binance** (BUY + SELL, top 20 por lado) contra VES.
 
-Implementa un sistema de caché integrado para ofrecer respuestas instantáneas, minimizar las peticiones al sitio del BCV y evitar bloqueos de IP.
+> Este servicio reemplaza los endpoints anteriores (`/api/tasa`, `/api/tasa/:moneda`) por
+> `GET /api/rates` y `GET /api/rates/:moneda`. Se despliega a un sitio **nuevo**; el deploy de
+> producción con las rutas `/api/tasa` queda intacto.
 
-![Node.js](https://img.shields.io/badge/Node.js-18.x-339933?style=for-the-badge&logo=node.js)
-![Express.js](https://img.shields.io/badge/Express.js-4.x-000000?style=for-the-badge&logo=express)
+## Stack
 
-## Características Principales
+- **Servidor:** [Node.js](https://nodejs.org/) + [Express](https://expressjs.com/)
+- **HTTP:** [Axios](https://axios-http.com/)
+- **Scraping:** [Cheerio](https://cheerio.js.org/)
+- **Config:** [dotenv](https://github.com/motdotla/dotenv)
 
-* **Extracción Confiable:** Obtiene las tasas de las principales divisas publicadas (USD, EUR, CNY, TRY, RUB).
-* **Sistema de Caché:** Las respuestas se almacenan en caché durante **3 horas** (configurable) para una velocidad extrema y para proteger tu servidor de ser bloqueado por el BCV.
-* **Endpoints Flexibles:** Provee un endpoint para todas las tasas y rutas dinámicas para consultar monedas individuales.
-* **Manejo de Errores:** Gestiona los errores de certificado SSL del BCV y los fallos de red.
+## Instalación y puesta en marcha
 
-## Instalación y Puesta en Marcha
-
-Sigue estos pasos para ejecutar la API en tu propio servidor o de forma local.
-
-**Requisitos Previos:**
-* [Node.js](https://nodejs.org/) (v16 o superior)
-
-**Pasos:**
-
-1.  Clona este repositorio:
-    ```bash
-    git clone https://github.com/Edgarbri26/api-bcv.git
-    ```
-
-2.  Navega a la carpeta del proyecto:
-    ```bash
-    cd tu-repo
-    ```
-
-3.  Instala las dependencias:
-    ```bash
-    npm install
-    ```
-
-4.  Inicia el servidor:
-    ```bash
-    node server.js
-    ```
-
-¡Eso es todo! El servidor se iniciará localmente en `http://localhost:3000`.
-
-## Endpoints de la API
-
-La API expone dos rutas principales para consumir los datos.
-
-### 1. Obtener Todas las Tasas
-
-Devuelve un objeto JSON completo con todas las tasas de cambio disponibles y la fecha de valor.
-
-* **Ruta:** `GET /api/tasa`
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "fuente": "Banco Central de Venezuela (BCV)",
-      "fecha_valor": "Martes, 04 Noviembre 2025",
-      "tasas": {
-        "USD": {
-          "valor_str": "224,37620000",
-          "valor_num": 224.3762
-        },
-        "EUR": {
-          "valor_str": "258,41406954",
-          "valor_num": 258.41406954
-        },
-        "CNY": {
-          "valor_str": "31,51129836",
-          "valor_num": 31.51129836
-        },
-        "TRY": {
-          "valor_str": "5,33673772",
-          "valor_num": 5.33673772
-        },
-        "RUB": {
-          "valor_str": "2,78071880",
-          "valor_num": 2.7807188
-        }
-      }
-    }
-    ```
-
----
-
-### 2. Obtener una Tasa Individual
-
-Devuelve el objeto JSON de una moneda específica. Los códigos de moneda no distinguen mayúsculas de minúsculas (`usd` funciona igual que `USD`).
-
-* **Ruta:** `GET /api/tasa/:moneda`
-* **Parámetros de Ruta:**
-    * `:moneda`: El código de la divisa (`usd`, `eur`, `cny`, `try`, `rub`).
-
-#### Ejemplo de Petición
-```bash
-GET /api/tasa/usd
+```sh
+npm install
+cp .env.example .env   # ajustar si es necesario
+node server.js         # o: npm start
 ```
 
-#### Respuesta Exitosa (200 OK)
+El servidor inicia en `http://localhost:3000`.
+
+## Variables de entorno (`.env`)
+
+| Variable | Descripción | Default |
+|---|---|---|
+| `PORT` | Puerto del servidor | `3000` |
+| `CACHE_MS` | Tiempo de caché por fuente en ms | `10800000` (3h) |
+| `BCV_URL` | URL del sitio del BCV | `https://www.bcv.org.ve/` |
+
+## Endpoints
+
+### 1. Obtener todas las tasas
+
+- **Ruta:** `GET /api/rates`
+- **Query opcional:** `?force=1` para forzar scraping (ignora la caché).
+
 ```json
 {
-  "moneda": "USD",
-  "fecha": "Martes, 04 Noviembre  2025",
-  "valor": {
-    "valor_str": "224,37620000",
-    "valor_num": 224.3762
-  }
+  "bcv": { "usd": 779.9522, "eur": 911.21815526, "fecha_iso": "2026-08-21" },
+  "usdt": { "valor": 916.9473499999998, "fecha_iso": "2026-08-20" },
+  "generated_at": "2026-08-20T23:06:50.127Z"
 }
 ```
 
-#### Ejemplo de Petición (Error)
-```bash
-GET /api/tasa/jpy
-```
+Si una fuente falla, se devuelve la otra con un campo `error` (error parcial). Si **todas**
+fallan, responde `500`.
 
-#### Respuesta de Error (404 Not Found)
+### 2. Obtener una moneda
+
+- **Ruta:** `GET /api/rates/:moneda` (`usd`, `eur`, `usdt`; no distingue mayúsculas).
+- **Query opcional:** `?force=1`.
+
 ```json
-{
-  "error": "Moneda no encontrada.",
-  "moneda_solicitada": "JPY",
-  "monedas_disponibles": [
-    "USD",
-    "EUR",
-    "CNY",
-    "TRY",
-    "RUB"
-  ]
-}
+{ "moneda": "USDT", "valor": 916.9473499999998, "fecha_iso": "2026-08-20" }
 ```
 
-## 🚀 Stack Tecnológico
+Si la moneda no existe, responde `404` con las disponibles.
 
-* **Servidor:** [Node.js](https://nodejs.org/), [Express](https://expressjs.com/)
-* **Cliente HTTP:** [Axios](https://axios-http.com/)
-* **Web Scraping:** [Cheerio](https://cheerio.js.org/)
+## Caché
 
-## ⚠️ Aviso Legal
+Se cachea **por fuente** durante `CACHE_MS` (3h por defecto) para evitar bloqueos por parte del
+BCV y de Binance. Usa `?force=1` cuando quieras forzar una consulta en vivo.
 
-Esta es una API no oficial y no está afiliada, asociada, autorizada, respaldada ni conectada de ninguna manera con el Banco Central de Venezuela (BCV).
+## Despliegue
 
-El propósito de este proyecto es puramente educativo y de conveniencia. Los datos se extraen (*scrapean*) directamente del sitio web público del BCV. El uso de esta API es bajo su propio riesgo.
+- Trabaja en la rama `feat/rates-p2p` del fork.
+- Despliega el nuevo código a **otro sitio** (ej. Vercel). El deploy actual de producción con
+  las rutas `/api/tasa` queda intacto.
+- El backend Adonis consume este servicio vía la variable `RATES_API_URL`.
+
+## Aviso Legal
+
+API no oficial. Los datos se extraen de fuentes públicas (BCV y P2P Binance). El uso es bajo tu
+propio riesgo.
