@@ -1,8 +1,11 @@
 // server.js
 // API de tasas de cambio: BCV (USD/EUR) + promedio P2P Binance (USDT).
-// Endpoints:
+// Endpoints nuevos:
 //   GET /api/rates          -> todas las fuentes (BCV + USDT)
 //   GET /api/rates/:moneda  -> una moneda (usd | eur | usdt)
+// Endpoints legacy (compatibilidad hacia atrás):
+//   GET /api/tasa           -> tasas BCV (USD, EUR) en formato original
+//   GET /api/tasa/:moneda   -> moneda individual (usd, eur) en formato original
 // Caché por fuente (CACHE_MS) + ?force=1 para forzar scraping.
 // Error parcial: si una fuente falla, se devuelve la otra con su campo "error".
 require('dotenv').config();
@@ -145,9 +148,92 @@ app.get('/api/rates/:moneda', async (req, res) => {
   }
 });
 
+// ─── Endpoints legacy (compatibilidad hacia atrás) ───────────────────────────
+const LEGACY_MONEDAS = ['USD', 'EUR'];
+
+app.get('/api/tasa', async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const bcv = await getBcv(force);
+
+    if (!bcv) {
+      return res.status(500).json({
+        error: 'Error interno del servidor.',
+        message: 'No se pudo obtener datos del BCV.',
+      });
+    }
+
+    const tasas = {};
+    for (const moneda of LEGACY_MONEDAS) {
+      const val = moneda === 'USD' ? bcv.usd : bcv.eur;
+      if (val !== null && val !== undefined) {
+        tasas[moneda] = {
+          valor_str: String(val).replace('.', ','),
+          valor_num: val,
+        };
+      }
+    }
+
+    res.json({
+      fuente: 'Banco Central de Venezuela (BCV)',
+      fecha_valor: bcv.fecha_iso || null,
+      fecha_iso: bcv.fecha_iso,
+      tasas,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error interno del servidor.',
+      message: error.message,
+    });
+  }
+});
+
+app.get('/api/tasa/:moneda', async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const moneda = String(req.params.moneda || '').toUpperCase();
+
+  if (!LEGACY_MONEDAS.includes(moneda)) {
+    return res.status(404).json({
+      error: 'Moneda no encontrada.',
+      moneda_solicitada: moneda,
+      monedas_disponibles: LEGACY_MONEDAS,
+    });
+  }
+
+  try {
+    const bcv = await getBcv(force);
+    const val = moneda === 'USD' ? bcv.usd : bcv.eur;
+
+    if (val === null || val === undefined) {
+      return res.status(502).json({
+        error: `No se pudo obtener la tasa de ${moneda}.`,
+        moneda,
+      });
+    }
+
+    res.json({
+      moneda,
+      fecha: bcv.fecha_iso,
+      fecha_iso: bcv.fecha_iso,
+      valor: {
+        valor_str: String(val).replace('.', ','),
+        valor_num: val,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error interno del servidor.',
+      message: error.message,
+    });
+  }
+});
+
+// ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`API de tasas corriendo en http://localhost:${PORT}`);
   console.log(`Endpoints:`);
   console.log(`  GET http://localhost:${PORT}/api/rates`);
   console.log(`  GET http://localhost:${PORT}/api/rates/:moneda (usd | eur | usdt)`);
+  console.log(`  GET http://localhost:${PORT}/api/tasa         (legacy)`);
+  console.log(`  GET http://localhost:${PORT}/api/tasa/:moneda (legacy: usd | eur)`);
 });
