@@ -6,7 +6,8 @@
 // Endpoints legacy (compatibilidad hacia atrás):
 //   GET /api/tasa           -> tasas BCV (USD, EUR) en formato original
 //   GET /api/tasa/:moneda   -> moneda individual (usd, eur) en formato original
-// Caché por fuente (CACHE_MS) + ?force=1 para forzar scraping.
+// Caché por fuente: USDT 30 min (CACHE_MS_USDT), BCV con refresco diario a la
+// 1:00 am (BCV_REFRESH_HOUR en la zona BCV_TZ). ?force=1 para forzar scraping.
 // Error parcial: si una fuente falla, se devuelve la otra con su campo "error".
 require('dotenv').config();
 const express = require('express');
@@ -15,16 +16,18 @@ const { scrapeUsdt } = require('./modules/binance');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CACHE_MS = Number(process.env.CACHE_MS) || 3 * 60 * 60 * 1000; // 3h
+const CACHE_MS_USDT = Number(process.env.CACHE_MS_USDT) || 30 * 60 * 1000; // 30 min
+const BCV_REFRESH_HOUR = Number(process.env.BCV_REFRESH_HOUR) || 1; // 1:00 am
+const BCV_TZ = process.env.BCV_TZ || 'America/Caracas';
 
 // Caché por fuente: { bcv: {data, ts}, usdt: {data, ts} }
 const cache = {};
 
 const MONEDAS = ['USD', 'EUR', 'USDT'];
 
-function cacheGet(source, force) {
+function cacheGet(source, force, ttl) {
   const entry = cache[source];
-  if (!force && entry && Date.now() - entry.ts < CACHE_MS) {
+  if (!force && entry && Date.now() - entry.ts < ttl) {
     return entry.data;
   }
   return null;
@@ -34,8 +37,55 @@ function cacheSet(source, data) {
   cache[source] = { data, ts: Date.now() };
 }
 
+// ─── Expiración por reloj para el BCV ────────────────────────────────────────
+// El BCV publica su tasa una vez al día. El caché es válido solo si se grabó
+// después de la última 1:00 am (BCV_REFRESH_HOUR) en la zona BCV_TZ.
+
+function zonedParts(date, tz) {
+  const parts = {};
+  for (const p of new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(date)) {
+    if (p.type !== 'literal') parts[p.type] = Number(p.value);
+  }
+  return parts;
+}
+
+function zonedTs(y, mo, d, hour, tz) {
+  const guess = Date.UTC(y, mo - 1, d, hour, 0, 0, 0);
+  const local = zonedParts(new Date(guess), tz);
+  const delta =
+    guess - Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, 0);
+  return guess + delta;
+}
+
+function lastBcvRefreshTs() {
+  const now = new Date();
+  const p = zonedParts(now, BCV_TZ);
+  let ts = zonedTs(p.year, p.month, p.day, BCV_REFRESH_HOUR, BCV_TZ);
+  if (ts > now.getTime()) {
+    const yp = zonedParts(new Date(now.getTime() - 24 * 60 * 60 * 1000), BCV_TZ);
+    ts = zonedTs(yp.year, yp.month, yp.day, BCV_REFRESH_HOUR, BCV_TZ);
+  }
+  return ts;
+}
+
+function bcvCacheGet(force) {
+  const entry = cache['bcv'];
+  if (!force && entry && entry.ts >= lastBcvRefreshTs()) {
+    return entry.data;
+  }
+  return null;
+}
+
 async function getBcv(force) {
-  const cached = cacheGet('bcv', force);
+  const cached = bcvCacheGet(force);
   if (cached) return cached;
   const data = await scrapeBcv();
   cacheSet('bcv', data);
@@ -43,7 +93,7 @@ async function getBcv(force) {
 }
 
 async function getUsdt(force) {
-  const cached = cacheGet('usdt', force);
+  const cached = cacheGet('usdt', force, CACHE_MS_USDT);
   if (cached) return cached;
   const data = await scrapeUsdt();
   cacheSet('usdt', data);

@@ -32,7 +32,9 @@ El servidor inicia en `http://localhost:3000`.
 | Variable | Descripción | Default |
 |---|---|---|
 | `PORT` | Puerto del servidor | `3000` |
-| `CACHE_MS` | Tiempo de caché por fuente en ms | `10800000` (3h) |
+| `CACHE_MS_USDT` | TTL de caché para USDT (P2P Binance) en ms | `1800000` (30 min) |
+| `BCV_REFRESH_HOUR` | Hora (0-23) de refresco diario del BCV | `1` (1:00 am) |
+| `BCV_TZ` | Zona horaria del BCV (IANA) | `America/Caracas` |
 | `BCV_URL` | URL del sitio del BCV | `https://www.bcv.org.ve/` |
 
 ## Endpoints
@@ -66,8 +68,13 @@ Si la moneda no existe, responde `404` con las disponibles.
 
 ## Caché
 
-Se cachea **por fuente** durante `CACHE_MS` (3h por defecto) para evitar bloqueos por parte del
-BCV y de Binance. Usa `?force=1` cuando quieras forzar una consulta en vivo.
+Se cachea **por fuente** para evitar bloqueos por parte del BCV y de Binance:
+
+- **USDT (P2P Binance):** `CACHE_MS_USDT` (30 min por defecto).
+- **BCV:** se invalida automáticamente a las `BCV_REFRESH_HOUR` (1:00 am por defecto, en la
+  zona `BCV_TZ`), ya que el BCV publica su tasa una vez al día.
+
+Usa `?force=1` cuando quieras forzar una consulta en vivo.
 
 ## Despliegue
 
