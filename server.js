@@ -88,6 +88,19 @@ function buildFullResponse(rates) {
   return payload;
 }
 
+// Health check: verifica que el servicio está corriendo. No depende del
+// scraping externo (BCV/Binance), responde rápido con 200.
+app.get('/api', (req, res) => {
+  res.json({
+    status: 'OK',
+    service: 'api-dollar',
+    version: '2.0.0',
+    uptime_seconds: Math.floor(process.uptime()),
+    generated_at: new Date().toISOString(),
+    endpoints: ['/api', '/api/rates', '/api/rates/:moneda', '/api/tasa', '/api/tasa/:moneda'],
+  });
+});
+
 app.get('/api/rates', async (req, res) => {
   const force = req.query.force === '1' || req.query.force === 'true';
   try {
@@ -232,6 +245,7 @@ app.get('/api/tasa/:moneda', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`API de tasas corriendo en http://localhost:${PORT}`);
   console.log(`Endpoints:`);
+  console.log(`  GET http://localhost:${PORT}/api            (health check)`);
   console.log(`  GET http://localhost:${PORT}/api/rates`);
   console.log(`  GET http://localhost:${PORT}/api/rates/:moneda (usd | eur | usdt)`);
   console.log(`  GET http://localhost:${PORT}/api/tasa         (legacy)`);
