@@ -1,179 +1,239 @@
+// server.js
+// API de tasas de cambio: BCV (USD/EUR) + promedio P2P Binance (USDT).
+// Endpoints nuevos:
+//   GET /api/rates          -> todas las fuentes (BCV + USDT)
+//   GET /api/rates/:moneda  -> una moneda (usd | eur | usdt)
+// Endpoints legacy (compatibilidad hacia atrás):
+//   GET /api/tasa           -> tasas BCV (USD, EUR) en formato original
+//   GET /api/tasa/:moneda   -> moneda individual (usd, eur) en formato original
+// Caché por fuente (CACHE_MS) + ?force=1 para forzar scraping.
+// Error parcial: si una fuente falla, se devuelve la otra con su campo "error".
+require('dotenv').config();
 const express = require('express');
-const axios = require('axios');
-const cheerio = require('cheerio');
-const https = require('https');
-
+const { scrapeBcv } = require('./modules/bcv');
+const { scrapeUsdt } = require('./modules/binance');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const BCV_URL = 'https://www.bcv.org.ve/';
+const CACHE_MS = Number(process.env.CACHE_MS) || 3 * 60 * 60 * 1000; // 3h
 
-let cache = null;
-let cacheTimestamp = null;
-const CACHE_DURATION_MS = 3 * 60 * 60 * 1000; // 3 horas
+// Caché por fuente: { bcv: {data, ts}, usdt: {data, ts} }
+const cache = {};
 
+const MONEDAS = ['USD', 'EUR', 'USDT'];
 
-function parseRate(rateStr) {
-  if (!rateStr) return null;
-  return parseFloat(rateStr.trim().replace(',', '.'));
-}
-
-function parseDateBCV(dateStr) {
-  if (!dateStr) return null;
-  // Formato habitual del BCV: "Jueves, 25 Enero 2024"
-  const months = {
-    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04', 'mayo': '05', 'junio': '06',
-    'julio': '07', 'agosto': '08', 'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
-  };
-  
-  const cleanStr = dateStr.toLowerCase().replace(/,/g, '').trim();
-  const parts = cleanStr.split(/\s+/);
-  
-  // Buscamos día (1-2 dígitos), año (4 dígitos) y mes (texto)
-  let day = parts.find(p => /^\d{1,2}$/.test(p));
-  let year = parts.find(p => /^\d{4}$/.test(p));
-  let monthName = parts.find(p => months[p]);
-  
-  if (day && year && monthName) {
-    return `${year}-${months[monthName]}-${day.padStart(2, '0')}`;
+function cacheGet(source, force) {
+  const entry = cache[source];
+  if (!force && entry && Date.now() - entry.ts < CACHE_MS) {
+    return entry.data;
   }
   return null;
 }
 
-
-async function scrapeBCVData() {
-  console.log('EXTRAYENDO DATOS DESDE EL BCV (SIN CACHÉ)...');
-  
-  // Crear un agente HTTPS que no rechace certificados no autorizados
-  const httpsAgent = new https.Agent({ 
-    rejectUnauthorized: false 
-  });
-
-  try {
-    const { data: html } = await axios.get(BCV_URL, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Host': 'www.bcv.org.ve'
-      },
-      decompress: true,
-      httpsAgent: httpsAgent
-    });
-
-    const $ = cheerio.load(html);
-
-    // extraer los datos
-    const dolarStr = $('#dolar strong').text();
-    const euroStr = $('#euro strong').text();
-    const yuanStr = $('#yuan strong').text();
-    const liraStr = $('#lira strong').text();
-    const rubloStr = $('#rublo strong').text();
-    const fecha = $(".pull-right .date-display-single").text().trim();
-    const fechaIso = parseDateBCV(fecha);
-
-    // construir la respuesta
-    const responseData = {
-      fuente: 'Banco Central de Venezuela (BCV)',
-      fecha_valor: fecha,
-      fecha_iso: fechaIso,
-      tasas: {
-        USD: {
-          valor_str: dolarStr.trim(),
-          valor_num: parseRate(dolarStr)
-        },
-        EUR: {
-          valor_str: euroStr.trim(),
-          valor_num: parseRate(euroStr)
-        },
-        CNY: {
-          valor_str: yuanStr.trim(),
-          valor_num: parseRate(yuanStr)
-        },
-        TRY: {
-          valor_str: liraStr.trim(),
-          valor_num: parseRate(liraStr)
-        },
-        RUB: {
-          valor_str: rubloStr.trim(),
-          valor_num: parseRate(rubloStr)
-        }
-      }
-    };
-
-    
-    cache = responseData;
-    cacheTimestamp = Date.now();
-    
-    return responseData;
-
-  } catch (error) {
-    console.error('Error al hacer scraping:', error.message);
-    
-    cache = null; 
-    cacheTimestamp = null;
-    throw new Error('No se pudo conectar y extraer los datos del BCV.');
-  }
+function cacheSet(source, data) {
+  cache[source] = { data, ts: Date.now() };
 }
 
-async function getTasaData() {
-  const ahora = Date.now();
-  if (cache && (ahora - cacheTimestamp < CACHE_DURATION_MS)) {
-    console.log('ENTREGANDO DATOS DESDE LA CACHÉ...');
-    return cache; 
-  }
-  
-  // Si la caché no existe o está expirada, hace scraping
-  return await scrapeBCVData();
+async function getBcv(force) {
+  const cached = cacheGet('bcv', force);
+  if (cached) return cached;
+  const data = await scrapeBcv();
+  cacheSet('bcv', data);
+  return data;
 }
 
+async function getUsdt(force) {
+  const cached = cacheGet('usdt', force);
+  if (cached) return cached;
+  const data = await scrapeUsdt();
+  cacheSet('usdt', data);
+  return data;
+}
 
-app.get('/api/tasa', async (req, res) => {
+/**
+ * Obtiene las tasas de todas las fuentes con error parcial.
+ * @returns {{ bcv?: any, usdt?: any, error?: Record<string,string> }}
+ */
+async function getAllRates(force) {
+  const result = {};
+
   try {
-    const data = await getTasaData();
-    res.json(data);
+    result.bcv = await getBcv(force);
   } catch (error) {
-    res.status(500).json({ 
-      error: 'Error interno del servidor.',
-      message: error.message 
-    });
+    result.error = { ...(result.error || {}), bcv: error.message };
   }
-});
 
-
-app.get('/api/tasa/:moneda', async (req, res) => {
   try {
-    const moneda = req.params.moneda.toUpperCase();
+    result.usdt = await getUsdt(force);
+  } catch (error) {
+    result.error = { ...(result.error || {}), usdt: error.message };
+  }
 
-    const data = await getTasaData();
+  return result;
+}
 
-    if (data.tasas && data.tasas[moneda]) {
-      res.json({
-        moneda: moneda,
-        fecha: data.fecha_valor,
-        fecha_iso: data.fecha_iso,
-        valor: data.tasas[moneda]
-      });
-    } else {
-      res.status(404).json({ 
-        error: 'Moneda no encontrada.',
-        moneda_solicitada: moneda,
-        monedas_disponibles: Object.keys(data.tasas)
+function buildFullResponse(rates) {
+  const bcv = rates.bcv;
+  const usdt = rates.usdt;
+
+  const payload = {
+    bcv: bcv
+      ? { usd: bcv.usd, eur: bcv.eur, fecha_iso: bcv.fecha_iso }
+      : null,
+    usdt: usdt ? { valor: usdt.usdt, fecha_iso: new Date().toISOString().slice(0, 10) } : null,
+    generated_at: new Date().toISOString(),
+  };
+
+  if (rates.error) payload.error = rates.error;
+  return payload;
+}
+
+app.get('/api/rates', async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const rates = await getAllRates(force);
+
+    // Si TODAS las fuentes fallaron, respondemos 500.
+    if (!rates.bcv && !rates.usdt) {
+      return res.status(500).json({
+        error: 'No se pudo obtener ninguna fuente de tasas.',
+        details: rates.error,
       });
     }
+
+    res.json(buildFullResponse(rates));
   } catch (error) {
-    res.status(500).json({ 
-      error: 'Error interno del servidor.',
-      message: error.message 
+    res.status(500).json({ error: 'Error interno del servidor.', message: error.message });
+  }
+});
+
+app.get('/api/rates/:moneda', async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const moneda = String(req.params.moneda || '').toUpperCase();
+
+  if (!MONEDAS.includes(moneda)) {
+    return res.status(404).json({
+      error: 'Moneda no encontrada.',
+      moneda_solicitada: moneda,
+      monedas_disponibles: MONEDAS,
+    });
+  }
+
+  try {
+    let data;
+    let fecha_iso = new Date().toISOString().slice(0, 10);
+
+    if (moneda === 'USDT') {
+      const usdt = await getUsdt(force);
+      data = usdt.usdt;
+    } else {
+      const bcv = await getBcv(force);
+      data = moneda === 'USD' ? bcv.usd : bcv.eur;
+      fecha_iso = bcv.fecha_iso || fecha_iso;
+    }
+
+    if (data === null || data === undefined) {
+      return res.status(502).json({
+        error: `No se pudo obtener la tasa de ${moneda} en esta fuente.`,
+        moneda,
+      });
+    }
+
+    res.json({ moneda, valor: data, fecha_iso });
+  } catch (error) {
+    res.status(500).json({
+      error: `Error obteniendo la tasa de ${moneda}.`,
+      message: error.message,
     });
   }
 });
 
-// Se inicia el servidor
+// ─── Endpoints legacy (compatibilidad hacia atrás) ───────────────────────────
+const LEGACY_MONEDAS = ['USD', 'EUR'];
+
+app.get('/api/tasa', async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const bcv = await getBcv(force);
+
+    if (!bcv) {
+      return res.status(500).json({
+        error: 'Error interno del servidor.',
+        message: 'No se pudo obtener datos del BCV.',
+      });
+    }
+
+    const tasas = {};
+    for (const moneda of LEGACY_MONEDAS) {
+      const val = moneda === 'USD' ? bcv.usd : bcv.eur;
+      if (val !== null && val !== undefined) {
+        tasas[moneda] = {
+          valor_str: String(val).replace('.', ','),
+          valor_num: val,
+        };
+      }
+    }
+
+    res.json({
+      fuente: 'Banco Central de Venezuela (BCV)',
+      fecha_valor: bcv.fecha_iso || null,
+      fecha_iso: bcv.fecha_iso,
+      tasas,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error interno del servidor.',
+      message: error.message,
+    });
+  }
+});
+
+app.get('/api/tasa/:moneda', async (req, res) => {
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const moneda = String(req.params.moneda || '').toUpperCase();
+
+  if (!LEGACY_MONEDAS.includes(moneda)) {
+    return res.status(404).json({
+      error: 'Moneda no encontrada.',
+      moneda_solicitada: moneda,
+      monedas_disponibles: LEGACY_MONEDAS,
+    });
+  }
+
+  try {
+    const bcv = await getBcv(force);
+    const val = moneda === 'USD' ? bcv.usd : bcv.eur;
+
+    if (val === null || val === undefined) {
+      return res.status(502).json({
+        error: `No se pudo obtener la tasa de ${moneda}.`,
+        moneda,
+      });
+    }
+
+    res.json({
+      moneda,
+      fecha: bcv.fecha_iso,
+      fecha_iso: bcv.fecha_iso,
+      valor: {
+        valor_str: String(val).replace('.', ','),
+        valor_num: val,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error interno del servidor.',
+      message: error.message,
+    });
+  }
+});
+
+// ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`API de tasas BCV corriendo en http://localhost:${PORT}`);
-  console.log(`Endpoint (TODAS): http://localhost:${PORT}/api/tasa`);
-  console.log(`Endpoint (INDIVIDUAL): http://localhost:${PORT}/api/tasa/usd (o /eur, /cny, etc.)`);
+  console.log(`API de tasas corriendo en http://localhost:${PORT}`);
+  console.log(`Endpoints:`);
+  console.log(`  GET http://localhost:${PORT}/api/rates`);
+  console.log(`  GET http://localhost:${PORT}/api/rates/:moneda (usd | eur | usdt)`);
+  console.log(`  GET http://localhost:${PORT}/api/tasa         (legacy)`);
+  console.log(`  GET http://localhost:${PORT}/api/tasa/:moneda (legacy: usd | eur)`);
 });
